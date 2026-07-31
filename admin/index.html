@@ -95,7 +95,7 @@
                 var self = this;
                 this.pendingScripts.push(function() {
                     if (isBabel) {
-                        fetch(src)
+                        fetch(src, { cache: 'no-store' })
                             .then(function(res) {
                                 if (!res.ok) {
                                     throw new Error("HTTP error " + res.status);
