@@ -17,6 +17,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 # 导入各模块的 Mixins，用于组装插件能力
 from .core.chat_flow import ProactiveCoreMixin
 from .core.data_storage import StorageMixin
+from .core.gate import GateMixin
 from .core.llm_adapter import LlmMixin
 from .core.message_events import EventsMixin
 from .core.message_sender import SenderMixin
@@ -36,6 +37,7 @@ class ProactiveChatPlugin(
     StorageMixin,  # 会话数据加载/保存与迁移清理
     ConfigMixin,  # 配置读取与会话级配置路由
     SchedulerMixin,  # 定时任务、自动触发与沉默计时
+    GateMixin,  # 心动门：主动消息触发前的 LLM 门禁评估
     LlmMixin,  # 上下文准备与 LLM 调用封装
     SenderMixin,  # 主动消息发送与装饰钩子
     EventsMixin,  # 私聊/群聊事件监听处理

@@ -399,6 +399,39 @@ class SchedulerMixin:
                     )
                 continue
 
+            # 优先恢复心动门 wait 任务（到点直接发送，不再过门禁）
+            pending = session_info.get("gate_pending")
+            if isinstance(pending, dict):
+                try:
+                    pending_trigger = float(pending.get("trigger_time") or 0)
+                except Exception:
+                    pending_trigger = 0.0
+                if pending_trigger > current_time and not self.scheduler.get_job(
+                    session_id
+                ):
+                    run_date = datetime.fromtimestamp(pending_trigger, tz=self.timezone)
+                    self.scheduler.add_job(
+                        self._send_pending_proactive,
+                        "date",
+                        run_date=run_date,
+                        args=[session_id],
+                        id=session_id,
+                        replace_existing=True,
+                        misfire_grace_time=60,
+                    )
+                    restored_count += 1
+                    logger.info(
+                        f"[主动消息] 已恢复心动门 wait 任务喵: {self._get_session_log_str(session_id, session_config)}, "
+                        f"执行时间: {run_date} 喵"
+                    )
+                    continue
+                if pending_trigger <= current_time:
+                    del session_info["gate_pending"]
+                    cleaned_runtime_state += 1
+                    logger.info(
+                        f"[主动消息] 已清理过期的门禁 wait 任务喵: {self._get_session_log_str(session_id, session_config)}"
+                    )
+
             # 仅恢复存在 next_trigger_time 的持久化任务
             next_trigger = session_info.get("next_trigger_time")
             if not next_trigger:
@@ -430,7 +463,7 @@ class SchedulerMixin:
                     continue
 
                 self.scheduler.add_job(
-                    self.check_and_chat,
+                    self._get_check_entry(),
                     "date",
                     run_date=run_date,
                     args=[session_id],
@@ -513,7 +546,7 @@ class SchedulerMixin:
             # 先清理同目标历史任务，再写入新任务，确保同一目标仅一条生效
             self._purge_related_jobs(normalized_session_id)
             self.scheduler.add_job(
-                self.check_and_chat,
+                self._get_check_entry(),
                 "date",
                 run_date=run_date,
                 args=[normalized_session_id],
@@ -628,7 +661,7 @@ class SchedulerMixin:
                 )
 
                 self.scheduler.add_job(
-                    self.check_and_chat,
+                    self._get_check_entry(),
                     "date",
                     run_date=run_date,
                     args=[session_id],

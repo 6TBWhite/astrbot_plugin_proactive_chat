@@ -140,6 +140,64 @@
                     }
                 }
             },
+            "gate_settings": {
+                "description": "🚪 心动门设置（防冷场增强）",
+                "type": "object",
+                "items": {
+                    "enable_gate": {
+                        "description": "✅ 启用心动门",
+                        "type": "bool",
+                        "default": false,
+                        "hint": "开启后，私聊主动消息到点时先由 LLM 评估\"该不该说、说什么、怎么说\"，通过才发送；被否决则静默重调度，不增加未回复计数。关闭时行为与旧版本完全一致"
+                    },
+                    "gate_model": {
+                        "description": "🧠 门禁评估模型 ID",
+                        "type": "string",
+                        "_special": "select_provider",
+                        "default": "",
+                        "hint": "可选。留空则复用当前会话的主模型。可填写更便宜的模型 ID 以降低成本。评估 prompt 很短，建议选低成本模型"
+                    },
+                    "daily_gate_calls_limit": {
+                        "description": "📅 每日门禁评估次数上限",
+                        "type": "int",
+                        "default": 3,
+                        "hint": "每个私聊会话每天最多进行几次门禁评估（LLM 调用），超出后当天不再评估并静默跳过。填 0 表示不限制。用户回复后会重置当日额度",
+                        "slider": {
+                            "min": 0,
+                            "max": 20,
+                            "step": 1
+                        }
+                    },
+                    "stickiness": {
+                        "description": "🤗 粘人度",
+                        "type": "int",
+                        "default": 3,
+                        "hint": "1-5 档，数字越大越粘人：冷场更短时间就产生开口意愿、wait 等待时间更短。1=高冷（冷场 12 小时以上才想开口），3=平衡（4 小时起想开口），5=粘人（1-2 小时就想开口）。未回复次数较高时整体意愿会降档",
+                        "slider": {
+                            "min": 1,
+                            "max": 5,
+                            "step": 1
+                        }
+                    },
+                    "gate_history_count": {
+                        "description": "📜 门评估可见的对话条数",
+                        "type": "int",
+                        "default": 20,
+                        "hint": "门禁评估时从对话历史中取最近多少条作为参考（单条最长 200 字）。设为 0 可跳过对话历史参考，门禁仅凭时间与渴望度判断，可降低评估成本。建议 10-30。注意：仅用于门禁判断，与『上下文注入设置』中的条数相互独立；生成阶段仍按上下文注入设置处理",
+                        "slider": {
+                            "min": 0,
+                            "max": 50,
+                            "step": 1
+                        }
+                    },
+                    "gate_prompt": {
+                        "description": "📝 门禁评估提示词",
+                        "type": "text",
+                        "default": "[系统任务：主动消息门禁评估]\n你是一个消息门禁评估器。请评估此刻是否应该在私聊中发起一次主动消息。你必须严格输出 JSON，不要输出任何其他内容。\n\n[评估要求]\n1. 时间是最重要的信号：冷场越久，越值得开口，语气也可以更有分量；刚聊完不久应避免打扰。\n2. 结合最近对话判断：是否有值得延续的话题？上次的话题是否被对方冷落（没接话）？对方是否正忙（对话似乎正在进行中）？有明确值得说的内容时，倾向 send。\n3. 渴望度高时优先考虑 send 或较短的 wait；渴望度低时倾向 skip。\n4. 未回复次数高时，除非有极强的理由，否则不要 send。\n\n[输出格式]\n{\n  \"decide\": \"send | wait | skip\",\n  \"reason\": \"一句话中文理由\",\n  \"impulse\": {\"topic\": \"话题名\", \"anchor\": \"对话原文或背景，用于生成开场时的锚点\"},\n  \"angle\": \"切入角度，即这次开口从哪个角度说\",\n  \"wait_minutes\": 45\n}\n说明：\n- send：现在就该说，必须提供 impulse 和 angle。\n- wait：值得说但此刻时机不合适，请给出 wait_minutes（多少分钟后发送），impulse 和 angle 必须保留，到点后将直接发送。\n- skip：不值得说，impulse / angle / wait_minutes 可以留空。\n请只输出上述 JSON。\n\n[情景信息]\n- 当前时间：{{current_time}}\n- 距离上次和对方互动已经过去：{{hours_since_last_chat}} 小时\n- 系统评估的当前\"开口渴望度\"：{{desire_level}}（low=低 / medium=中 / high=高）。渴望度由系统根据冷场时长与粘人度计算：冷场越久、粘人度越高，渴望越高。它代表此刻该有的开口意愿，请把它作为重要的决策信号。\n- 我之前已经主动找过对方但没有收到回复的次数：{{unanswered_count}} 次。这个次数越高，开口越要克制，除非有非常充分的理由。\n\n[最近对话参考]\n{{history_context}}",
+                        "hint": "可选自定义。支持占位符：{{current_time}}（当前时间）、{{hours_since_last_chat}}（距上次互动小时数）、{{desire_level}}（系统计算的开口渴望度）、{{unanswered_count}}（未回复次数）、{{history_context}}（最近对话摘录，条数由『门评估可见的对话条数』控制）。输出必须为包含 decide 字段的 JSON"
+                    }
+                }
+            },
             "tts_settings": {
                 "description": "🔊 私聊全局语音合成 (TTS) 设置",
                 "type": "object",

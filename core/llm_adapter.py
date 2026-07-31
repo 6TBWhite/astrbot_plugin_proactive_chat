@@ -712,13 +712,28 @@ class LlmMixin:
         history_messages: list,
         system_prompt: str,
         unanswered_count: int,
+        impulse_text: str = "",
     ) -> tuple[str | None, str]:
-        """统一 LLM 调用入口，返回(生成文本, 用户提示词)。"""
+        """统一 LLM 调用入口，返回(生成文本, 用户提示词)。
+
+        impulse_text: 可选。心动门评估结果文本，模板含 {{impulse}} 时替换，
+        否则追加到提示词末尾，旧模板无需改动也能生效。
+        """
         motivation_template = session_config.get("proactive_prompt", "")
         now_str = datetime.now(self.timezone).strftime("%Y年%m月%d日 %H:%M")
         final_user_simulation_prompt = motivation_template.replace(
             "{{unanswered_count}}", str(unanswered_count)
         ).replace("{{current_time}}", now_str)
+
+        if impulse_text:
+            if "{{impulse}}" in final_user_simulation_prompt:
+                final_user_simulation_prompt = final_user_simulation_prompt.replace(
+                    "{{impulse}}", impulse_text
+                )
+            else:
+                final_user_simulation_prompt = (
+                    f"{final_user_simulation_prompt}\n\n{impulse_text}"
+                )
 
         logger.debug("[主动消息] 已生成包含动机和时间的 Prompt 喵。")
 

@@ -135,7 +135,7 @@ class ProactiveCoreMixin:
 
         if scheduled_job_payload is not None:
             self.scheduler.add_job(
-                self.check_and_chat,
+                self._get_check_entry(),
                 "date",
                 run_date=scheduled_job_payload["run_date"],
                 args=[session_id],
@@ -147,8 +147,14 @@ class ProactiveCoreMixin:
                 f"[主动消息] 已为 {self._get_session_log_str(session_id, scheduled_job_payload['session_config'])} 安排下一次主动消息喵，时间：{scheduled_job_payload['run_date'].strftime('%Y-%m-%d %H:%M:%S')} 喵。"
             )
 
-    async def check_and_chat(self, session_id: str) -> None:
-        """由定时任务触发的核心函数，完成一次完整的主动消息流程。"""
+    async def check_and_chat(
+        self, session_id: str, gate_impulse: dict | None = None
+    ) -> None:
+        """由定时任务触发的核心函数，完成一次完整的主动消息流程。
+
+        gate_impulse: 可选。心动门 wait 任务到点后传入的评估结果，
+        用于把话题/锚点/角度注入生成阶段。默认 None 表示无门禁注入。
+        """
         normalized_session_id = self._normalize_session_id(session_id)
         try:
             # 免打扰与启用状态检查
@@ -231,12 +237,16 @@ class ProactiveCoreMixin:
             }
 
             # 调用 LLM
+            impulse_text = ""
+            if gate_impulse and isinstance(gate_impulse, dict):
+                impulse_text = self._format_gate_impulse_text(gate_impulse)
             response_text, final_user_prompt = await self._generate_llm_response(
                 session_id,
                 session_config,
                 history_messages,
                 system_prompt,
                 unanswered_count,
+                impulse_text=impulse_text,
             )
             if not response_text:
                 await self._schedule_next_chat_and_save(session_id)
