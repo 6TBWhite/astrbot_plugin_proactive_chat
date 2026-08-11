@@ -107,7 +107,7 @@
                         "slider": {
                             "min": 1,
                             "max": 2880,
-                            "step": 30
+                            "step": 1
                         }
                     },
                     "max_interval_minutes": {
@@ -118,7 +118,42 @@
                         "slider": {
                             "min": 1,
                             "max": 2880,
-                            "step": 30
+                            "step": 1
+                        }
+                    },
+                    "thought_model": {
+                        "description": "⚠️ 特殊配置：心念分析模型",
+                        "type": "string",
+                        "_special": "select_provider",
+                        "default": "",
+                        "hint": "可选。建议选择成本较低、JSON 遵循能力稳定的小模型，只负责判断此刻是否开口并提取话头；最终主动消息仍由当前会话主模型生成。留空则心念也复用当前会话模型。"
+                    },
+                    "thought_persona_prompt": {
+                        "description": "⚠️ 特殊配置：精炼心念人格提示词",
+                        "type": "text",
+                        "default": "",
+                        "hint": "可选，只提供给心念分析模型，不影响最终主动消息。人格原文较长时，可在这里填写保留身份、关系、语气和边界的精炼版本以节省 token；留空则自动沿用当前对话实际使用的人格 system prompt。"
+                    },
+                    "mean_position_ratio": {
+                        "description": "⚠️ 特殊配置：平均时间位置比例",
+                        "type": "float",
+                        "default": 0.375,
+                        "hint": "一般不要改。它表示平均开口时间在最短到最长区间中的位置，实际均值 = 最短时间 + 比例 × (最长时间 - 最短时间)。默认 0.375；例如 40～200 分钟时均值为 100 分钟。平时只调整上下限即可，均值会自动跟随。",
+                        "slider": {
+                            "min": 0.2,
+                            "max": 0.575,
+                            "step": 0.025
+                        }
+                    },
+                    "weibull_shape": {
+                        "description": "⚠️ 特殊配置：Weibull 分布形状",
+                        "type": "float",
+                        "default": 1.7,
+                        "hint": "一般不要改。它控制私聊开口时间聚集或分散的程度，不改变上面的目标均值。默认 1.7 已针对主动消息节奏调好；数值越大，时间越集中在均值附近。",
+                        "slider": {
+                            "min": 1.5,
+                            "max": 2.0,
+                            "step": 0.1
                         }
                     },
                     "quiet_hours": {

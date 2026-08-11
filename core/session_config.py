@@ -35,10 +35,11 @@ class ConfigMixin:
                 # 调度区间合法性
                 schedule_settings = friend_settings.get("schedule_settings", {})
                 min_interval = schedule_settings.get("min_interval_minutes", 30)
-                max_interval = schedule_settings.get("max_interval_minutes", 900)
+                max_interval = schedule_settings.get("max_interval_minutes", 600)
                 if min_interval > max_interval:
                     logger.warning(
-                        "[主动消息] 私聊主动消息配置中最小间隔大于最大间隔喵，将自动调整喵。"
+                        "[主动消息] 私聊主动消息配置中最小间隔大于最大间隔喵，"
+                        "运行时会使用安全区间且不会改写配置文件喵。"
                     )
 
             # 群聊配置校验

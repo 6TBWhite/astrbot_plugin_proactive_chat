@@ -10,6 +10,11 @@ from typing import Any
 
 from astrbot.api import logger
 
+from .silence_distribution import (
+    build_truncated_weibull,
+    target_mean_from_bounds,
+)
+
 
 class SchedulerMixin:
     """调度与计时相关的混入类。"""
@@ -24,6 +29,122 @@ class SchedulerMixin:
     plugin_start_time: float
     session_temp_state: dict[str, dict]
     _cleanup_counter: int
+
+    def _is_private_session_id(self, session_id: str) -> bool:
+        parsed = self._parse_session_id(session_id)
+        return bool(parsed and self._is_friend_type(parsed[1]))
+
+    def _get_private_silence_distribution(self, schedule_conf: dict):
+        """按当前私聊配置构造沉默时间分布，不改写用户配置。"""
+        minimum = schedule_conf.get("min_interval_minutes", 30)
+        maximum = schedule_conf.get("max_interval_minutes", 600)
+        distribution = build_truncated_weibull(
+            minimum,
+            maximum,
+            target_mean_from_bounds(
+                minimum,
+                maximum,
+                schedule_conf.get("mean_position_ratio", 0.375),
+            ),
+            schedule_conf.get("weibull_shape", 1.7),
+        )
+        if distribution.used_mean_fallback:
+            logger.warning(
+                "[主动消息] 私聊目标均值 %.2f 分钟不适用于当前 %.2f-%.2f 分钟、"
+                "k=%.2f 的截断 Weibull 分布，本轮临时使用区间中点 %.2f 分钟喵。",
+                distribution.requested_mean,
+                distribution.minimum,
+                distribution.maximum,
+                distribution.shape,
+                distribution.target_mean,
+            )
+        return distribution
+
+    def _build_schedule_timing(
+        self,
+        session_id: str,
+        session_config: dict,
+        *,
+        scheduled_at: float,
+        cycle_started_at: float | None = None,
+        after_silence: bool = False,
+    ) -> dict[str, Any]:
+        """统一生成一次调度时间；群聊仍保持上游均匀分布。"""
+        schedule_conf = session_config.get("schedule_settings", {})
+        is_private = self._is_private_session_id(session_id)
+        if not is_private:
+            min_seconds = int(schedule_conf.get("min_interval_minutes", 30)) * 60
+            max_seconds = max(
+                min_seconds,
+                int(schedule_conf.get("max_interval_minutes", 900)) * 60,
+            )
+            sampled_seconds = random.randint(min_seconds, max_seconds)
+            return {
+                "cycle_started_at": scheduled_at,
+                "next_trigger_time": scheduled_at + sampled_seconds,
+                "effective_min_seconds": min_seconds,
+                "max_seconds": max_seconds,
+                "sampled_seconds": sampled_seconds,
+                "phase": "uniform",
+                "is_private": False,
+            }
+
+        distribution = self._get_private_silence_distribution(schedule_conf)
+        cycle_start = (
+            float(cycle_started_at)
+            if after_silence and cycle_started_at is not None
+            else scheduled_at
+        )
+        elapsed_minutes = max(0.0, (scheduled_at - cycle_start) / 60.0)
+        effective_lower = (
+            max(distribution.minimum, elapsed_minutes)
+            if after_silence
+            else distribution.minimum
+        )
+        sampled_minutes = distribution.sample(
+            after=effective_lower if after_silence else None
+        )
+        return {
+            "cycle_started_at": cycle_start,
+            "next_trigger_time": cycle_start + sampled_minutes * 60.0,
+            "effective_min_seconds": effective_lower * 60.0,
+            "max_seconds": distribution.maximum * 60.0,
+            "sampled_seconds": sampled_minutes * 60.0,
+            "phase": "after_silence" if after_silence else "initial",
+            "is_private": True,
+        }
+
+    @staticmethod
+    def _write_schedule_state(
+        session_payload: dict,
+        timing: dict[str, Any],
+        *,
+        include_next_trigger: bool = True,
+    ) -> None:
+        """把调度计划写入兼容现有 WebUI 的持久化字段。"""
+        if include_next_trigger:
+            session_payload["next_trigger_time"] = timing["next_trigger_time"]
+        session_payload["last_scheduled_at"] = timing["cycle_started_at"]
+        session_payload["last_schedule_min_interval_seconds"] = timing[
+            "effective_min_seconds"
+        ]
+        session_payload["last_schedule_max_interval_seconds"] = timing["max_seconds"]
+        session_payload["last_schedule_random_interval_seconds"] = timing[
+            "sampled_seconds"
+        ]
+
+        if timing["is_private"]:
+            session_payload["thought_cycle_started_at"] = timing["cycle_started_at"]
+            session_payload["last_schedule_phase"] = timing["phase"]
+            if timing["phase"] == "initial":
+                session_payload["thought_silence_used"] = False
+        else:
+            for key in (
+                "thought_cycle_started_at",
+                "thought_silence_used",
+                "last_schedule_phase",
+            ):
+                session_payload.pop(key, None)
 
     async def _setup_auto_trigger(self, session_id: str, silent: bool = False) -> None:
         """为指定会话设置自动主动消息触发器。"""
@@ -158,6 +279,9 @@ class SchedulerMixin:
             "last_schedule_min_interval_seconds",
             "last_schedule_max_interval_seconds",
             "last_schedule_random_interval_seconds",
+            "thought_cycle_started_at",
+            "thought_silence_used",
+            "last_schedule_phase",
         }
 
         changed = False
@@ -430,7 +554,7 @@ class SchedulerMixin:
                     continue
 
                 self.scheduler.add_job(
-                    self.check_and_chat,
+                    self._get_check_entry(),
                     "date",
                     run_date=run_date,
                     args=[session_id],
@@ -475,8 +599,6 @@ class SchedulerMixin:
         if not session_config:
             return
 
-        schedule_conf = session_config.get("schedule_settings", {})
-
         async with self.data_lock:
             # 如果存在非规范化的旧键，迁移到规范化键
             if normalized_session_id != session_id and session_id in self.session_data:
@@ -499,21 +621,21 @@ class SchedulerMixin:
                     "unanswered_count"
                 ] = 0
 
-            # 计算随机触发时间
-            min_interval = int(schedule_conf.get("min_interval_minutes", 30)) * 60
-            max_interval = max(
-                min_interval, int(schedule_conf.get("max_interval_minutes", 900)) * 60
-            )
-            random_interval = random.randint(min_interval, max_interval)
             scheduled_at = time.time()
-            next_trigger_time = scheduled_at + random_interval
-            run_date = datetime.fromtimestamp(next_trigger_time, tz=self.timezone)
+            timing = self._build_schedule_timing(
+                normalized_session_id,
+                session_config,
+                scheduled_at=scheduled_at,
+            )
+            run_date = datetime.fromtimestamp(
+                timing["next_trigger_time"], tz=self.timezone
+            )
 
             # 更新调度器与持久化数据
             # 先清理同目标历史任务，再写入新任务，确保同一目标仅一条生效
             self._purge_related_jobs(normalized_session_id)
             self.scheduler.add_job(
-                self.check_and_chat,
+                self._get_check_entry(),
                 "date",
                 run_date=run_date,
                 args=[normalized_session_id],
@@ -523,16 +645,78 @@ class SchedulerMixin:
             )
 
             session_payload = self.session_data.setdefault(normalized_session_id, {})
-            session_payload["next_trigger_time"] = next_trigger_time
-            session_payload["last_scheduled_at"] = scheduled_at
-            session_payload["last_schedule_min_interval_seconds"] = min_interval
-            session_payload["last_schedule_max_interval_seconds"] = max_interval
-            session_payload["last_schedule_random_interval_seconds"] = random_interval
+            self._write_schedule_state(session_payload, timing)
             logger.info(
                 f"[主动消息] 已为 {self._get_session_log_str(normalized_session_id, session_config)} 安排下一次主动消息喵，时间：{run_date.strftime('%Y-%m-%d %H:%M:%S')} 喵。"
             )
 
             await self._save_data_internal()
+
+    async def _reschedule_after_thought_silence(
+        self,
+        session_id: str,
+        *,
+        expected_last_message_time: float,
+    ) -> str:
+        """在原时间窗的剩余部分重抽一次。
+
+        返回 ``scheduled``、``deadline`` 或 ``stale``。后两者分别表示已经
+        到达上界需要立即发送，或用户刚刚发言导致本次心念失效。
+        """
+        normalized_session_id = self._normalize_session_id(session_id)
+        session_config = self._get_session_config(normalized_session_id)
+        if not session_config:
+            return "stale"
+
+        async with self.data_lock:
+            if (
+                self.last_message_times.get(normalized_session_id, 0)
+                > expected_last_message_time
+            ):
+                return "stale"
+
+            session_payload = self.session_data.setdefault(normalized_session_id, {})
+            scheduled_at = time.time()
+            cycle_started_at = float(
+                session_payload.get("thought_cycle_started_at")
+                or session_payload.get("last_scheduled_at")
+                or scheduled_at
+            )
+            timing = self._build_schedule_timing(
+                normalized_session_id,
+                session_config,
+                scheduled_at=scheduled_at,
+                cycle_started_at=cycle_started_at,
+                after_silence=True,
+            )
+            session_payload["thought_silence_used"] = True
+
+            if timing["next_trigger_time"] <= scheduled_at:
+                await self._save_data_internal()
+                return "deadline"
+
+            self._purge_related_jobs(normalized_session_id)
+            run_date = datetime.fromtimestamp(
+                timing["next_trigger_time"], tz=self.timezone
+            )
+            self.scheduler.add_job(
+                self._get_check_entry(),
+                "date",
+                run_date=run_date,
+                args=[normalized_session_id],
+                id=normalized_session_id,
+                replace_existing=True,
+                misfire_grace_time=60,
+            )
+            self._write_schedule_state(session_payload, timing)
+            session_payload["thought_silence_used"] = True
+            await self._save_data_internal()
+
+        logger.info(
+            f"[主动消息] 心念选择暂不说话，已为 {self._get_session_log_str(normalized_session_id, session_config)} "
+            f"在原时间窗内重抽至 {run_date.strftime('%Y-%m-%d %H:%M:%S')} 喵。"
+        )
+        return "scheduled"
 
     async def _reset_group_silence_timer(self, session_id: str) -> None:
         """重置指定群聊的沉默倒计时。"""
@@ -606,29 +790,27 @@ class SchedulerMixin:
                 ):
                     return
 
-                schedule_conf = current_config.get("schedule_settings", {})
-                min_interval = int(schedule_conf.get("min_interval_minutes", 30)) * 60
-                max_interval = max(
-                    min_interval,
-                    int(schedule_conf.get("max_interval_minutes", 900)) * 60,
-                )
-                random_interval = random.randint(min_interval, max_interval)
                 scheduled_at = time.time()
-                next_trigger_time = scheduled_at + random_interval
-                run_date = datetime.fromtimestamp(next_trigger_time, tz=self.timezone)
+                timing = self._build_schedule_timing(
+                    session_id,
+                    current_config,
+                    scheduled_at=scheduled_at,
+                )
+                run_date = datetime.fromtimestamp(
+                    timing["next_trigger_time"], tz=self.timezone
+                )
 
                 # 自动触发生成的任务虽然不持久化到磁盘，但仍需补齐运行时元信息，
                 # 以便 Web 管理端能够正确计算倒计时进度，而不是误判为满进度。
                 session_payload = self.session_data.setdefault(session_id, {})
-                session_payload["last_scheduled_at"] = scheduled_at
-                session_payload["last_schedule_min_interval_seconds"] = min_interval
-                session_payload["last_schedule_max_interval_seconds"] = max_interval
-                session_payload["last_schedule_random_interval_seconds"] = (
-                    random_interval
+                self._write_schedule_state(
+                    session_payload,
+                    timing,
+                    include_next_trigger=False,
                 )
 
                 self.scheduler.add_job(
-                    self.check_and_chat,
+                    self._get_check_entry(),
                     "date",
                     run_date=run_date,
                     args=[session_id],

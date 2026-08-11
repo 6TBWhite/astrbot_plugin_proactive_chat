@@ -27,6 +27,7 @@ from .core.session_override_manager import SessionOverrideManager
 from .core.session_parser import SessionMixin
 from .core.task_scheduler import SchedulerMixin
 from .core.telemetry_manager import TelemetryManager
+from .core.thought import ThoughtMixin
 from .core.web_admin_server import WebAdminServer
 from .utils.version import get_plugin_version
 
@@ -36,6 +37,7 @@ class ProactiveChatPlugin(
     StorageMixin,  # 会话数据加载/保存与迁移清理
     ConfigMixin,  # 配置读取与会话级配置路由
     SchedulerMixin,  # 定时任务、自动触发与沉默计时
+    ThoughtMixin,  # 心念层：私聊开口前选择话头并允许一次克制
     LlmMixin,  # 上下文准备与 LLM 调用封装
     SenderMixin,  # 主动消息发送与装饰钩子
     EventsMixin,  # 私聊/群聊事件监听处理

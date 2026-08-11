@@ -79,6 +79,9 @@ class StorageMixin:
             "last_schedule_min_interval_seconds",
             "last_schedule_max_interval_seconds",
             "last_schedule_random_interval_seconds",
+            "thought_cycle_started_at",
+            "thought_silence_used",
+            "last_schedule_phase",
         ]:
             if key not in incoming:
                 continue
@@ -93,7 +96,12 @@ class StorageMixin:
                     merged[key] = max(merged[key], incoming[key])
                 continue
 
-            if key in {"last_message_time", "next_trigger_time", "last_scheduled_at"}:
+            if key in {
+                "last_message_time",
+                "next_trigger_time",
+                "last_scheduled_at",
+                "thought_cycle_started_at",
+            }:
                 if isinstance(merged[key], (int, float)) and isinstance(
                     incoming[key], (int, float)
                 ):
@@ -104,6 +112,8 @@ class StorageMixin:
                 "last_schedule_min_interval_seconds",
                 "last_schedule_max_interval_seconds",
                 "last_schedule_random_interval_seconds",
+                "last_schedule_phase",
+                "thought_silence_used",
             }:
                 base_scheduled_at = merged.get("last_scheduled_at")
                 incoming_scheduled_at = incoming.get("last_scheduled_at")

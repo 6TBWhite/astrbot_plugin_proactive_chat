@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import random
 import time
-from datetime import datetime
 from typing import Any
 
 from astrbot.api import logger
@@ -16,6 +14,7 @@ from astrbot.core.agent.message import (
 )
 
 from ..utils.time_utils import is_quiet_time
+from .thought import ThoughtCycleContext
 
 
 class ProactiveCoreMixin:
@@ -86,9 +85,6 @@ class ProactiveCoreMixin:
         is_private_session = parsed and (
             "Friend" in parsed[1] or "Private" in parsed[1]
         )
-        session_config = None
-        scheduled_job_payload = None
-
         async with self.data_lock:
             # 更新未回复计数器
             # 每次主动发送成功后，未回复次数 +1
@@ -100,55 +96,15 @@ class ProactiveCoreMixin:
                 f"[主动消息] {self._get_session_log_str(session_id)} 的第 {new_unanswered_count} 次主动消息已发送完成，当前未回复次数: {new_unanswered_count} 次喵。"
             )
 
-            # 私聊任务：锁内仅计算调度参数并写入持久化字段，避免在持锁期间操作调度器。
-            if is_private_session:
-                session_config = self._get_session_config(session_id)
-                if not session_config:
-                    return
-
-                schedule_conf = session_config.get("schedule_settings", {})
-                min_interval = int(schedule_conf.get("min_interval_minutes", 30)) * 60
-                max_interval = max(
-                    min_interval,
-                    int(schedule_conf.get("max_interval_minutes", 900)) * 60,
-                )
-                # 私聊采用配置区间内随机间隔，减少触发规律性
-                random_interval = random.randint(min_interval, max_interval)
-                scheduled_at = time.time()
-                next_trigger_time = scheduled_at + random_interval
-                run_date = datetime.fromtimestamp(next_trigger_time, tz=self.timezone)
-
-                session_payload = self.session_data.setdefault(session_id, {})
-                session_payload["next_trigger_time"] = next_trigger_time
-                session_payload["last_scheduled_at"] = scheduled_at
-                session_payload["last_schedule_min_interval_seconds"] = min_interval
-                session_payload["last_schedule_max_interval_seconds"] = max_interval
-                session_payload["last_schedule_random_interval_seconds"] = (
-                    random_interval
-                )
-                scheduled_job_payload = {
-                    "run_date": run_date,
-                    "session_config": session_config,
-                }
-
             await self._save_data_internal()
 
-        if scheduled_job_payload is not None:
-            self.scheduler.add_job(
-                self.check_and_chat,
-                "date",
-                run_date=scheduled_job_payload["run_date"],
-                args=[session_id],
-                id=session_id,
-                replace_existing=True,
-                misfire_grace_time=60,
-            )
-            logger.info(
-                f"[主动消息] 已为 {self._get_session_log_str(session_id, scheduled_job_payload['session_config'])} 安排下一次主动消息喵，时间：{scheduled_job_payload['run_date'].strftime('%Y-%m-%d %H:%M:%S')} 喵。"
-            )
+        if is_private_session:
+            await self._schedule_next_chat_and_save(session_id)
 
-    async def check_and_chat(self, session_id: str) -> None:
-        """由定时任务触发的核心函数，完成一次完整的主动消息流程。"""
+    async def check_and_chat(
+        self, session_id: str, *, use_thought: bool = False
+    ) -> None:
+        """完成一次主动消息流程；手动调用默认绕过心念层。"""
         normalized_session_id = self._normalize_session_id(session_id)
         try:
             # 免打扰与启用状态检查
@@ -181,8 +137,15 @@ class ProactiveCoreMixin:
 
             # 未回复次数上限检查
             async with self.data_lock:
-                unanswered_count = self.session_data.get(normalized_session_id, {}).get(
-                    "unanswered_count", 0
+                session_payload = self.session_data.get(normalized_session_id, {})
+                unanswered_count = session_payload.get("unanswered_count", 0)
+                thought_silence_used = bool(
+                    session_payload.get("thought_silence_used", False)
+                )
+                thought_cycle_started_at = float(
+                    session_payload.get("thought_cycle_started_at")
+                    or session_payload.get("last_scheduled_at")
+                    or time.time()
                 )
                 max_unanswered = schedule_conf.get("max_unanswered_times", 3)
                 if max_unanswered > 0 and unanswered_count >= max_unanswered:
@@ -230,13 +193,37 @@ class ProactiveCoreMixin:
                 "timestamp": time.time(),
             }
 
-            # 调用 LLM
+            # 定时触发的私聊先产生一次心念；手动触发和群聊保持上游直发流程。
+            thought_text = ""
+            if use_thought and self._is_private_session_id(session_id):
+                should_continue, thought_text = await self._run_scheduled_thought(
+                    ThoughtCycleContext(
+                        session_id=session_id,
+                        history_messages=history_messages,
+                        persona_system_prompt=system_prompt,
+                        unanswered_count=unanswered_count,
+                        cycle_started_at=thought_cycle_started_at,
+                        silence_used=thought_silence_used,
+                        last_message_time=task_start_state["last_message_time"],
+                        thought_provider_id=str(
+                            schedule_conf.get("thought_model") or ""
+                        ).strip(),
+                        thought_persona_prompt=str(
+                            schedule_conf.get("thought_persona_prompt") or ""
+                        ).strip(),
+                    )
+                )
+                if not should_continue:
+                    return
+
+            # 调用最终回复生成模型
             response_text, final_user_prompt = await self._generate_llm_response(
                 session_id,
                 session_config,
                 history_messages,
                 system_prompt,
                 unanswered_count,
+                thought_text=thought_text,
             )
             if not response_text:
                 await self._schedule_next_chat_and_save(session_id)
