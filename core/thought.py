@@ -39,7 +39,7 @@ class ThoughtMixin:
     THOUGHT_TIMEOUT_SECONDS = 45
     THOUGHT_HISTORY_LIMIT = 24
     THOUGHT_PROMPT = """[系统任务：主动消息心念]
-现在是 {{current_time}}。距离本轮沉默周期开始已经过去 {{elapsed_minutes}} 分钟。
+现在是 {{current_time}}。距离对方最后一条消息已经过去 {{elapsed_minutes}} 分钟。
 我此前连续主动开口但尚未收到回复的次数是 {{unanswered_count}}。
 这一次{{silence_instruction}}
 
@@ -171,7 +171,11 @@ class ThoughtMixin:
         """
         silence_count = max(0, int(context.silence_count or 0))
         can_stay_silent = silence_count < MAX_THOUGHT_SILENCES
-        elapsed_minutes = max(0.0, (time.time() - context.cycle_started_at) / 60.0)
+        last_message_time = max(0.0, float(context.last_message_time or 0))
+        if last_message_time > 0:
+            elapsed_minutes = max(0.0, (time.time() - last_message_time) / 60.0)
+        else:
+            elapsed_minutes = max(0.0, (time.time() - context.cycle_started_at) / 60.0)
         thought_persona_prompt = str(context.thought_persona_prompt or "").strip()
         thought = await self._generate_inner_thought(
             context.session_id,
