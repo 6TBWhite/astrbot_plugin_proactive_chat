@@ -41,6 +41,17 @@ class LifecycleMixin:
         # 初始化共享锁
         self.data_lock = asyncio.Lock()
 
+        # 旧心动门配置不再参与新版心念逻辑，启动时一次性清理。
+        if self._migrate_legacy_gate_config():
+            logger.info("[主动消息] 已移除旧心动门全局配置喵。")
+        removed_overrides = (
+            await self.session_override_manager.remove_legacy_gate_settings()
+        )
+        if removed_overrides:
+            logger.info(
+                f"[主动消息] 已从 {removed_overrides} 个会话覆写中移除旧心动门配置喵。"
+            )
+
         # 配置校验（异常不阻断启动）
         try:
             await self._validate_config()
@@ -53,10 +64,20 @@ class LifecycleMixin:
         async with self.data_lock:
             await self._load_data_internal()
             # 启动时先做会话键规范化，避免历史数据中的多键并存
+            migrated_thought_silence = self._migrate_thought_silence_state()
             normalized = self._normalize_session_data()
-            if normalized:
+            removed_gate_state = self._migrate_legacy_gate_state()
+            if normalized or removed_gate_state or migrated_thought_silence:
                 # 仅在发生规范化变更时回写，减少无效 IO
                 await self._save_data_internal()
+            if removed_gate_state:
+                logger.info(
+                    f"[主动消息] 已清理 {removed_gate_state} 个旧心动门运行状态字段喵。"
+                )
+            if migrated_thought_silence:
+                logger.info(
+                    f"[主动消息] 已迁移 {migrated_thought_silence} 个旧心念沉默状态字段喵。"
+                )
         logger.info("[主动消息] 已成功从文件加载会话数据喵。")
 
         # 恢复插件启动后的消息时间（用于自动触发判定）

@@ -79,6 +79,9 @@ class StorageMixin:
             "last_schedule_min_interval_seconds",
             "last_schedule_max_interval_seconds",
             "last_schedule_random_interval_seconds",
+            "thought_cycle_started_at",
+            "thought_silence_count",
+            "last_schedule_phase",
         ]:
             if key not in incoming:
                 continue
@@ -93,7 +96,12 @@ class StorageMixin:
                     merged[key] = max(merged[key], incoming[key])
                 continue
 
-            if key in {"last_message_time", "next_trigger_time", "last_scheduled_at"}:
+            if key in {
+                "last_message_time",
+                "next_trigger_time",
+                "last_scheduled_at",
+                "thought_cycle_started_at",
+            }:
                 if isinstance(merged[key], (int, float)) and isinstance(
                     incoming[key], (int, float)
                 ):
@@ -104,6 +112,8 @@ class StorageMixin:
                 "last_schedule_min_interval_seconds",
                 "last_schedule_max_interval_seconds",
                 "last_schedule_random_interval_seconds",
+                "last_schedule_phase",
+                "thought_silence_count",
             }:
                 base_scheduled_at = merged.get("last_scheduled_at")
                 incoming_scheduled_at = incoming.get("last_scheduled_at")
@@ -120,6 +130,35 @@ class StorageMixin:
             if merged[key] is None:
                 merged[key] = incoming[key]
         return merged
+
+    def _migrate_legacy_gate_state(self) -> int:
+        """清除旧心动门留下的等待任务和每日调用计数。"""
+        removed_count = 0
+        for payload in self.session_data.values():
+            if not isinstance(payload, dict):
+                continue
+            for key in ("gate_pending", "gate_date", "gate_calls_today"):
+                if key in payload:
+                    del payload[key]
+                    removed_count += 1
+        return removed_count
+
+    def _migrate_thought_silence_state(self) -> int:
+        """把旧的 ``thought_silence_used`` 布尔字段迁移为 ``thought_silence_count``。"""
+        migrated_count = 0
+        for payload in self.session_data.values():
+            if not isinstance(payload, dict):
+                continue
+            if "thought_silence_used" not in payload:
+                continue
+            old_value = payload.get("thought_silence_used")
+            if "thought_silence_count" not in payload:
+                payload["thought_silence_count"] = (
+                    1 if old_value is True or str(old_value).lower() == "true" else 0
+                )
+            del payload["thought_silence_used"]
+            migrated_count += 1
+        return migrated_count
 
     def _normalize_session_data(self) -> bool:
         """规范化并合并 session_data 中的重复会话键。"""

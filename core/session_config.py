@@ -17,6 +17,28 @@ class ConfigMixin:
     config: dict
     session_override_manager: Any
 
+    def _migrate_legacy_gate_config(self) -> bool:
+        """移除旧心动门配置；新版心念层不再提供独立配置。"""
+        friend_settings = self.config.get("friend_settings")
+        if (
+            not isinstance(friend_settings, dict)
+            or "gate_settings" not in friend_settings
+        ):
+            return False
+        legacy_gate = friend_settings.pop("gate_settings")
+        if isinstance(legacy_gate, dict):
+            legacy_model = str(legacy_gate.get("gate_model") or "").strip()
+            schedule_settings = friend_settings.setdefault("schedule_settings", {})
+            if (
+                legacy_model
+                and isinstance(schedule_settings, dict)
+                and not str(schedule_settings.get("thought_model") or "").strip()
+            ):
+                schedule_settings["thought_model"] = legacy_model
+        if hasattr(self.config, "save_config"):
+            self.config.save_config()
+        return True
+
     async def _validate_config(self) -> None:
         """验证插件配置的完整性和有效性"""
         try:
@@ -35,10 +57,11 @@ class ConfigMixin:
                 # 调度区间合法性
                 schedule_settings = friend_settings.get("schedule_settings", {})
                 min_interval = schedule_settings.get("min_interval_minutes", 30)
-                max_interval = schedule_settings.get("max_interval_minutes", 900)
+                max_interval = schedule_settings.get("max_interval_minutes", 600)
                 if min_interval > max_interval:
                     logger.warning(
-                        "[主动消息] 私聊主动消息配置中最小间隔大于最大间隔喵，将自动调整喵。"
+                        "[主动消息] 私聊主动消息配置中最小间隔大于最大间隔喵，"
+                        "运行时会使用安全区间且不会改写配置文件喵。"
                     )
 
             # 群聊配置校验

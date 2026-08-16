@@ -108,6 +108,32 @@ class SessionOverrideManager:
             self._overrides.pop(session_id, None)
             await self._save()
 
+    async def remove_legacy_gate_settings(self) -> int:
+        """清除历史会话覆写中的 gate_settings。"""
+        changed = 0
+        async with self._lock:
+            for session_id, override in list(self._overrides.items()):
+                if not isinstance(override, dict) or "gate_settings" not in override:
+                    continue
+                legacy_gate = override.pop("gate_settings")
+                if isinstance(legacy_gate, dict):
+                    legacy_model = str(legacy_gate.get("gate_model") or "").strip()
+                    schedule_settings = override.setdefault("schedule_settings", {})
+                    if (
+                        legacy_model
+                        and isinstance(schedule_settings, dict)
+                        and not str(
+                            schedule_settings.get("thought_model") or ""
+                        ).strip()
+                    ):
+                        schedule_settings["thought_model"] = legacy_model
+                changed += 1
+                if not override:
+                    del self._overrides[session_id]
+            if changed:
+                await self._save()
+        return changed
+
     def get_effective(
         self, session_id: str, base_config: dict[str, Any] | None
     ) -> dict[str, Any]:

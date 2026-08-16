@@ -13,6 +13,8 @@ from astrbot.api import logger
 class LlmMixin:
     """上下文获取与 LLM 调用相关混入类。"""
 
+    PROACTIVE_INTERNAL_PROMPT_MARKER = "[主动消息内部任务]"
+    THOUGHT_PROMPT_MARKER = "[本次主动消息心念]"
     PLATFORM_CONTEXT_MAX_CHARS = 4000
     PLATFORM_LIST_CONTENT_KEYS = ("message", "content")
     PLATFORM_TEXT_CONTENT_KEYS = ("text", "message_str", "message", "content")
@@ -96,8 +98,22 @@ class LlmMixin:
                 # 非字符串内容强制转字符串
                 msg_dict["content"] = str(content) if content is not None else ""
 
+            if msg_dict.get("role") == "user" and self._is_internal_proactive_prompt(
+                msg_dict["content"]
+            ):
+                continue
             sanitized_history.append(msg_dict)
         return sanitized_history
+
+    def _is_internal_proactive_prompt(self, content: str) -> bool:
+        """识别存档中的内部主动生成提示，避免下一轮把它当作用户原话。"""
+        return any(
+            marker in content
+            for marker in (
+                self.PROACTIVE_INTERNAL_PROMPT_MARKER,
+                self.THOUGHT_PROMPT_MARKER,
+            )
+        )
 
     def _get_context_settings(self, session_id: str) -> dict[str, Any]:
         """读取上下文来源配置并做容错。"""
@@ -712,27 +728,29 @@ class LlmMixin:
         history_messages: list,
         system_prompt: str,
         unanswered_count: int,
-        impulse_text: str = "",
+        thought_text: str = "",
     ) -> tuple[str | None, str]:
         """统一 LLM 调用入口，返回(生成文本, 用户提示词)。
 
-        impulse_text: 可选。心动门评估结果文本，模板含 {{impulse}} 时替换，
-        否则追加到提示词末尾，旧模板无需改动也能生效。
+        thought_text: 可选。心念层选出的本轮话头文本。
         """
         motivation_template = session_config.get("proactive_prompt", "")
         now_str = datetime.now(self.timezone).strftime("%Y年%m月%d日 %H:%M")
-        final_user_simulation_prompt = motivation_template.replace(
+        rendered_prompt = motivation_template.replace(
             "{{unanswered_count}}", str(unanswered_count)
         ).replace("{{current_time}}", now_str)
+        final_user_simulation_prompt = (
+            f"{self.PROACTIVE_INTERNAL_PROMPT_MARKER}\n{rendered_prompt}"
+        )
 
-        if impulse_text:
-            if "{{impulse}}" in final_user_simulation_prompt:
+        if thought_text:
+            if "{{thought}}" in final_user_simulation_prompt:
                 final_user_simulation_prompt = final_user_simulation_prompt.replace(
-                    "{{impulse}}", impulse_text
+                    "{{thought}}", thought_text
                 )
             else:
                 final_user_simulation_prompt = (
-                    f"{final_user_simulation_prompt}\n\n{impulse_text}"
+                    f"{final_user_simulation_prompt}\n\n{thought_text}"
                 )
 
         logger.debug("[主动消息] 已生成包含动机和时间的 Prompt 喵。")

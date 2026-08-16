@@ -28,7 +28,6 @@ const CONFIG_ICONS = {
     schedule_settings: '🕒',
     tts_settings: '🔊',
     segmented_reply_settings: '🔪',
-    gate_settings: '🚪',
     enable: '✅',
     session_list: '📋',
     proactive_prompt: '🧠',
@@ -37,6 +36,9 @@ const CONFIG_ICONS = {
     auto_trigger_after_minutes: '⏱️',
     min_interval_minutes: '⏱️',
     max_interval_minutes: '⏱️',
+    thought_model: '🧠',
+    mean_position_ratio: '🎯',
+    weibull_shape: '📊',
     quiet_hours: '🌙',
     max_unanswered_times: '🛑',
     enable_tts: '💬',
@@ -52,13 +54,7 @@ const CONFIG_ICONS = {
     host: '📡',
     port: '🔌',
     password: '🔑',
-    session_name: '🏷️',
-    enable_gate: '✅',
-    gate_model: '🧠',
-    daily_gate_calls_limit: '📅',
-    stickiness: '🤗',
-    gate_history_count: '📜',
-    gate_prompt: '📝'
+    session_name: '🏷️'
 };
 
 // 某些 Schema 描述文本自身已带 emoji；这里剥离前缀，避免界面上图标重复出现。
@@ -568,7 +564,6 @@ function getSessionSchemaEntries(schema, sessionType) {
         'proactive_prompt',
         'context_settings',
         'schedule_settings',
-        'gate_settings',
         'tts_settings',
         'segmented_reply_settings',
     ];
@@ -1294,4 +1289,3 @@ function ConfigRenderer() {
 
 window.ConfigRenderer = ConfigRenderer;
 })();
-

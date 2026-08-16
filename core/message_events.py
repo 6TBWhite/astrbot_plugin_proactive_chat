@@ -112,7 +112,6 @@ class EventsMixin:
         logger.info(
             f"[主动消息] 重置 {self._get_session_log_str(normalized_session_id, session_config)} 的未回复计数器为0喵。"
         )
-        await self._clear_gate_state(normalized_session_id)
         await self._schedule_next_chat_and_save(
             normalized_session_id, reset_counter=True
         )
